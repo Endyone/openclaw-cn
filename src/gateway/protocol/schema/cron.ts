@@ -6,6 +6,9 @@ export const CronScheduleSchema = Type.Union([
     {
       kind: Type.Literal("at"),
       at: NonEmptyString,
+      /** Unix timestamp in milliseconds; accepted alongside or instead of `at`.
+       *  When only atMs is provided, the gateway normalizes it to an ISO `at` string. */
+      atMs: Type.Optional(Type.Integer({ minimum: 0 })),
     },
     { additionalProperties: false },
   ),

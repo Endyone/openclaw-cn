@@ -22,12 +22,16 @@ function coerceSchedule(schedule: UnknownRecord) {
   const kind = typeof schedule.kind === "string" ? schedule.kind : undefined;
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
-  const parsedAtMs =
-    typeof atMsRaw === "string"
-      ? parseAbsoluteTimeMs(atMsRaw)
-      : typeof atRaw === "string"
-        ? parseAbsoluteTimeMs(atRaw)
-        : null;
+
+  // Resolve atMs as a number: prefer already-numeric atMs, then parse string at/atMs.
+  const atMsFromRaw: number | null =
+    typeof atMsRaw === "number"
+      ? atMsRaw
+      : typeof atMsRaw === "string"
+        ? parseAbsoluteTimeMs(atMsRaw)
+        : typeof atRaw === "string"
+          ? parseAbsoluteTimeMs(atRaw)
+          : null;
 
   if (!kind) {
     if (
@@ -43,12 +47,16 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
   }
 
-  if (typeof schedule.atMs !== "number" && parsedAtMs !== null) {
-    next.atMs = parsedAtMs;
-  }
-
-  if ("at" in next) {
-    delete next.at;
+  // Normalize the `at` field: always keep/produce a normalized UTC ISO string
+  // so the gateway schema (which requires `at: string`) passes validation and
+  // `computeNextRunAtMs` can reliably use `schedule.at`.
+  // When only atMs (numeric ms) was provided, synthesize the ISO string from it.
+  if (atMsFromRaw !== null) {
+    next.atMs = atMsFromRaw;
+    // Keep normalized ISO string so schema validation and schedule.ts are happy.
+    if (typeof next.at !== "string" || !next.at.trim()) {
+      next.at = new Date(atMsFromRaw).toISOString();
+    }
   }
 
   return next;
