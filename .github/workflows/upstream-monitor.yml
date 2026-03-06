@@ -531,6 +531,163 @@ jobs:
             echo '```'
           } > /tmp/issue-body.md
 
+          # GitHub Issue body 上限 65536 字符，渐进裁剪
+          MAX_BODY=62000
+          BODY_SIZE=$(wc -c < /tmp/issue-body.md)
+          echo "Issue body: $BODY_SIZE chars"
+
+          if [ "$BODY_SIZE" -gt "$MAX_BODY" ]; then
+            echo "⚠️ Body 过长 ($BODY_SIZE > $MAX_BODY)，重新生成精简版"
+
+            # 根据超标程度决定各节显示上限
+            MERGE_LIMIT=100; REVIEW_LIMIT=50; OPT_LIMIT=30; SKIP_LIMIT=30; AI_LIMIT=30; MSG_LEN=60
+            if [ "$BODY_SIZE" -gt 120000 ]; then
+              MERGE_LIMIT=50; REVIEW_LIMIT=30; OPT_LIMIT=15; SKIP_LIMIT=15; AI_LIMIT=15; MSG_LEN=50
+            fi
+            if [ "$BODY_SIZE" -gt 200000 ]; then
+              MERGE_LIMIT=30; REVIEW_LIMIT=20; OPT_LIMIT=10; SKIP_LIMIT=10; AI_LIMIT=10; MSG_LEN=40
+            fi
+
+            {
+              echo "## 上游新 Release: $TAGS"
+              echo ""
+              echo "**范围**: \`$PREV\` → \`$LATEST\` | 共 **$TOTAL** 个 commit"
+              echo ""
+              if [ "$AI_USED" = "true" ]; then
+                echo "> 🧠 **AI 已审查分类**（修正了 **$AI_OVERRIDES** 项）"
+              elif [ "$AI_STATUS" = "not_configured" ]; then
+                echo "> ⚙️ 使用规则引擎分类（未配置 AI_API_KEY）"
+              else
+                echo "> ⚙️ 使用规则引擎分类（AI 状态: $AI_STATUS）"
+              fi
+              echo ""
+              echo "> ⚠️ **此 Issue 经过精简**，完整数据见仓库 \`.github/upstream-commits/\` 目录"
+              echo ""
+              echo "### 📊 分类摘要"
+              echo ""
+              echo "| 类别 | 数量 | 处理方式 |"
+              echo "|------|------|----------|"
+              echo "| 🔴 P0 安全修复 | **$P0** | 建议优先合入 |"
+              echo "| 🟠 P1 关键修复 | **$P1** | 建议合入 |"
+              echo "| 👁 需人工审查 | **$REVIEW** | 手动处理 |"
+              echo "| 🔵 可选 | **$OPTIONAL** | 按需 |"
+              echo "| ⚪ 已跳过 | **$SKIP** | 不使用的渠道/CI/docs |"
+              echo ""
+              echo "---"
+              echo ""
+              echo "### ✅ 建议合并清单 (P0+P1)"
+              echo ""
+              if [ "$MERGE" -gt 0 ]; then
+                echo "| 状态 | 优先级 | Commit | 描述 | 类别 | 风险 |"
+                echo "|------|--------|--------|------|------|------|"
+                jq -r --argjson lim "$MERGE_LIMIT" --argjson ml "$MSG_LEN" \
+                  '[.[] | select(.action == "MERGE")] | limit($lim; .[]) |
+                  "| ⏳ | \(.priority) | `\(.sha[:10])` | \(.message | gsub("[|]"; "/") | .[0:$ml]) | \(.category) | \(.conflict_risk) |"' \
+                  /tmp/commits.json
+                MERGE_INT=$(jq '[.[] | select(.action == "MERGE")] | length' /tmp/commits.json)
+                if [ "$MERGE_INT" -gt "$MERGE_LIMIT" ]; then
+                  echo ""
+                  echo "_... 及其他 $((MERGE_INT - MERGE_LIMIT)) 个 MERGE commit_"
+                fi
+              else
+                echo "_无需合并的 commit_"
+              fi
+              echo ""
+              if [ "$AI_USED" = "true" ] && [ "$AI_OVERRIDES" -gt 0 ]; then
+                echo "<details>"
+                echo "<summary>🧠 AI 修正记录 ($AI_OVERRIDES 项)</summary>"
+                echo ""
+                echo "| Commit | 描述 | AI 备注 |"
+                echo "|--------|------|---------|"
+                jq -r --argjson lim "$AI_LIMIT" --argjson ml "$MSG_LEN" \
+                  '[.[] | select(.ai_note)] | limit($lim; .[]) |
+                  "| `\(.sha[:10])` | \(.message | gsub("[|]"; "/") | .[0:$ml]) | \(.ai_note) |"' \
+                  /tmp/commits.json
+                AI_TOTAL=$(jq '[.[] | select(.ai_note)] | length' /tmp/commits.json)
+                if [ "$AI_TOTAL" -gt "$AI_LIMIT" ]; then
+                  echo ""
+                  echo "_... 及其他 $((AI_TOTAL - AI_LIMIT)) 项_"
+                fi
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+              if [ "$REVIEW" -gt 0 ]; then
+                echo "### 👁 需人工审查"
+                echo ""
+                echo "| Commit | 描述 | 类别 | 备注 |"
+                echo "|--------|------|------|------|"
+                jq -r --argjson lim "$REVIEW_LIMIT" --argjson ml "$MSG_LEN" \
+                  '[.[] | select(.action == "REVIEW")] | limit($lim; .[]) |
+                  "| `\(.sha[:10])` | \(.message | gsub("[|]"; "/") | .[0:$ml]) | \(.category) | 需对比本地实现 |"' \
+                  /tmp/commits.json
+                REVIEW_INT=$(jq '[.[] | select(.action == "REVIEW")] | length' /tmp/commits.json)
+                if [ "$REVIEW_INT" -gt "$REVIEW_LIMIT" ]; then
+                  echo ""
+                  echo "_... 及其他 $((REVIEW_INT - REVIEW_LIMIT)) 个 REVIEW commit_"
+                fi
+                echo ""
+              fi
+              if [ "$OPTIONAL" -gt 0 ]; then
+                echo "<details>"
+                echo "<summary>🔵 可选合并 ($OPTIONAL 个)</summary>"
+                echo ""
+                echo "| Commit | 描述 | 类别 |"
+                echo "|--------|------|------|"
+                jq -r --argjson lim "$OPT_LIMIT" --argjson ml "$MSG_LEN" \
+                  '[.[] | select(.action == "OPTIONAL")] | limit($lim; .[]) |
+                  "| `\(.sha[:10])` | \(.message | gsub("[|]"; "/") | .[0:$ml]) | \(.category) |"' \
+                  /tmp/commits.json
+                OPT_INT=$(jq '[.[] | select(.action == "OPTIONAL")] | length' /tmp/commits.json)
+                if [ "$OPT_INT" -gt "$OPT_LIMIT" ]; then
+                  echo ""
+                  echo "_... 及其他 $((OPT_INT - OPT_LIMIT)) 个 commit_"
+                fi
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+              echo "<details>"
+              echo "<summary>⚪ 已跳过 ($SKIP 个)</summary>"
+              echo ""
+              echo "| Commit | 描述 | 类别 |"
+              echo "|--------|------|------|"
+              jq -r --argjson lim "$SKIP_LIMIT" --argjson ml "$MSG_LEN" \
+                '[.[] | select(.action == "SKIP")] | limit($lim; .[]) |
+                "| `\(.sha[:10])` | \(.message | gsub("[|]"; "/") | .[0:$ml]) | \(.category) |"' \
+                /tmp/commits.json
+              SKIP_INT=$(jq '[.[] | select(.action == "SKIP")] | length' /tmp/commits.json)
+              if [ "$SKIP_INT" -gt "$SKIP_LIMIT" ]; then
+                echo ""
+                echo "_... 及其他 $((SKIP_INT - SKIP_LIMIT)) 个 commit_"
+              fi
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "---"
+              echo ""
+              echo "### 🔧 手动操作"
+              echo ""
+              echo '```bash'
+              echo "# 查看待合并 commit"
+              echo "git log --oneline <prev_tag>..<latest_tag>"
+              echo "# 手动 cherry-pick"
+              echo "git cherry-pick <sha>"
+              echo '```'
+            } > /tmp/issue-body.md
+
+            BODY_SIZE=$(wc -c < /tmp/issue-body.md)
+            echo "精简后: $BODY_SIZE chars"
+          fi
+
+          # 最终兜底：硬截断到 GitHub 上限以内
+          if [ "$BODY_SIZE" -gt "$MAX_BODY" ]; then
+            echo "⚠️ 仍然过长，硬截断到 ${MAX_BODY} 字符"
+            head -c "$MAX_BODY" /tmp/issue-body.md > /tmp/issue-body-trunc.md
+            printf '\n\n---\n\n> ⚠️ **Issue 内容已截断**，完整数据见 `.github/upstream-commits/` 目录\n' >> /tmp/issue-body-trunc.md
+            mv /tmp/issue-body-trunc.md /tmp/issue-body.md
+          fi
+
           gh label create upstream --description "上游变更追踪" --color "0075ca" --force -R "$GITHUB_REPOSITORY" 2>&1 || true
 
           ISSUE_URL=$(gh issue create -R "$GITHUB_REPOSITORY" \
