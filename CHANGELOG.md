@@ -25,6 +25,7 @@ Docs: https://clawd.org.cn/
 - **插件加载容错**：修复源码目录型（无 `dist/index.js`）捆绑插件加载报错的问题，改为静默跳过
 - **插件去重优化**：修复同一插件同时存在捆绑版和 npm 安装版时产生 "duplicate plugin id" 警告的问题
 - **Control UI CSP 修复**：允许从 `fonts.googleapis.com` / `fonts.gstatic.com` 加载字体，解决 Web UI 字体被 Content Security Policy 拦截的问题
+- **`readChannelAllowFromStore` 合并读取修复**：修复 `pairing approve` 写入 account-scoped `feishu-default-allowFrom.json` 而官方插件读取 channel-level `feishu-allowFrom.json` 导致批准后仍提示未配对的问题。现在读取时自动合并两个文件，保证官方插件和社区插件都能识别已批准的发送者
 
 ### bug修复
 
